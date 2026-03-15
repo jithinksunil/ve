@@ -77,3 +77,13 @@ The service writes structured JSON logs to stdout/stderr for easy ingestion in m
 - Process-level failures (`process_unhandled_rejection`, `process_uncaught_exception`)
 
 Each request is tagged with `requestId` for correlation across API, section, and tool logs.
+
+### Endpoint integration test
+
+Run:
+
+```bash
+npm run test:endpoints
+```
+
+The test runs the API with `MOCK_REPORT_DATA=1`, calls every endpoint over HTTP, and validates final JSON payloads against the section Zod schemas.

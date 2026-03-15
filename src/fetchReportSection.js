@@ -1,6 +1,7 @@
 import { zodToJsonSchema } from "zod-to-json-schema";
 import { SECTION_SCHEMAS } from "./schemas.js";
 import { logger } from "./logger.js";
+import { generateMockSectionData } from "./mockData.js";
 
 export const MCP_TOOLS_BY_SECTION = {
   companyOverview: [
@@ -106,6 +107,15 @@ export async function fetchReportSection(section, options, openai, mcpClients, m
     model,
     maxIterations
   });
+
+  if (process.env.MOCK_REPORT_DATA === "1") {
+    const mocked = generateMockSectionData(section, { ticker, exchange, fiscalYear, context });
+    logger.info("section_fetch_completed_mock", {
+      requestId,
+      section
+    });
+    return mocked;
+  }
 
   const jsonSchema = zodToJsonSchema(schema, { name: "output", $refStrategy: "none" });
   const registry = buildMCPToolRegistry(mcpClients);
