@@ -1,4 +1,4 @@
-import { zodToJsonSchema } from "zod-to-json-schema";
+import { zodTextFormat } from "openai/helpers/zod";
 import { SECTION_SCHEMAS } from "./schemas.js";
 import { logger } from "./logger.js";
 import { generateMockSectionData } from "./mockData.js";
@@ -65,23 +65,22 @@ export function buildMCPToolRegistry(mcpClients) {
       registry[toolName] = {
         definition: {
           type: "function",
-          function: {
-            name: toolName,
-            description: `MCP tool ${toolName}`,
-            parameters: {
-              type: "object",
-              properties: {
-                ticker: { type: "string" },
-                exchange: { type: "string" },
-                fiscalYear: { type: "string" },
-                limit: { type: "number" },
-                lookbackDays: { type: "number" },
-                years: { type: "number" },
-                period: { type: "string" },
-                query: { type: "string" },
-                industry: { type: "string" },
-                companyName: { type: "string" }
-              }
+          name: toolName,
+          description: `MCP tool ${toolName}`,
+          strict: false,
+          parameters: {
+            type: "object",
+            properties: {
+              ticker: { type: "string" },
+              exchange: { type: "string" },
+              fiscalYear: { type: "string" },
+              limit: { type: "number" },
+              lookbackDays: { type: "number" },
+              years: { type: "number" },
+              period: { type: "string" },
+              query: { type: "string" },
+              industry: { type: "string" },
+              companyName: { type: "string" }
             }
           }
         },
@@ -93,7 +92,7 @@ export function buildMCPToolRegistry(mcpClients) {
 }
 
 export async function fetchReportSection(section, options, openai, mcpClients, monitoring = {}) {
-  const { ticker, exchange = "", fiscalYear = "", context = {}, model = "gpt-4o", maxIterations = 10 } = options;
+  const { ticker, exchange = "", fiscalYear = "", context = {}, model = "gpt-5.2-2025-12-11", maxIterations = 10 } = options;
   const { requestId } = monitoring;
   const schema = SECTION_SCHEMAS[section];
   if (!schema) throw new Error(`Unsupported section: ${section}`);
@@ -116,106 +115,47 @@ export async function fetchReportSection(section, options, openai, mcpClients, m
     });
     return mocked;
   }
-
-  const jsonSchema = zodToJsonSchema(schema, { name: "output", $refStrategy: "none" });
-  const registry = buildMCPToolRegistry(mcpClients);
-  const toolsForSection = (MCP_TOOLS_BY_SECTION[section] || []).filter((name) => registry[name]);
-
-  const messages = [
-    { role: "system", content: SYSTEM_PROMPTS[section] },
-    {
-      role: "user",
-      content: [
-        `Section: ${section}`,
-        `ticker=${ticker}`,
-        exchange ? `exchange=${exchange}` : "",
-        fiscalYear ? `fiscalYear=${fiscalYear}` : "",
-        Object.keys(context).length ? `context=${JSON.stringify(context)}` : "",
-        "Return only JSON matching this schema:",
-        JSON.stringify(jsonSchema)
-      ].filter(Boolean).join("\n")
-    }
-  ];
-
-  const toolExecutors = Object.fromEntries(toolsForSection.map((n) => [n, registry[n].execute]));
-
-  let iterations = 0;
-  while (iterations < maxIterations) {
-    iterations += 1;
-    logger.info("section_fetch_iteration", {
-      requestId,
-      section,
-      iteration: iterations,
-      toolCount: toolsForSection.length
-    });
-
-    const response = await openai.chat.completions.create({
-      model,
-      messages,
-      tools: toolsForSection.length ? toolsForSection.map((n) => registry[n].definition) : undefined,
-      tool_choice: toolsForSection.length ? "auto" : undefined,
-      temperature: 0.1
-    });
-
-    const assistantMessage = response.choices[0].message;
-    messages.push(assistantMessage);
-
-    if (!assistantMessage.tool_calls?.length) {
-      const raw = (assistantMessage.content || "").replace(/^```(?:json)?\n?/, "").replace(/\n?```$/, "").trim();
-      const parsed = JSON.parse(raw);
-      const validated = schema.parse(parsed);
-      logger.info("section_fetch_completed", {
-        requestId,
-        section,
-        iterations
-      });
-      return validated;
-    }
-
-    const results = await Promise.all(
-      assistantMessage.tool_calls.map(async (toolCall) => {
-        const args = JSON.parse(toolCall.function.arguments || "{}");
-        const fn = toolExecutors[toolCall.function.name];
-        const toolStart = Date.now();
-
-        logger.info("tool_call_started", {
-          requestId,
-          section,
-          toolName: toolCall.function.name
-        });
-
-        let content;
-        try {
-          content = JSON.stringify(fn ? await fn(args) : { error: `Unknown tool: ${toolCall.function.name}` });
-          logger.info("tool_call_completed", {
-            requestId,
-            section,
-            toolName: toolCall.function.name,
-            durationMs: Date.now() - toolStart
-          });
-        } catch (error) {
-          logger.error("tool_call_failed", error, {
-            requestId,
-            section,
-            toolName: toolCall.function.name,
-            durationMs: Date.now() - toolStart
-          });
-          content = JSON.stringify({ error: String(error) });
-        }
-
-        return { role: "tool", tool_call_id: toolCall.id, content };
-      })
-    );
-
-    messages.push(...results);
-  }
-
-  logger.warn("section_fetch_max_iterations_exceeded", {
+  logger.info("section_fetch_iteration", {
     requestId,
     section,
-    maxIterations
+    iteration: 1,
+    toolCount: 1
   });
-  throw new Error(`Exceeded max iterations (${maxIterations}) for section ${section}`);
+
+  const prompt = [
+    `Section: ${section}`,
+    `ticker=${ticker}`,
+    exchange ? `exchange=${exchange}` : "",
+    fiscalYear ? `fiscalYear=${fiscalYear}` : "",
+    Object.keys(context).length ? `context=${JSON.stringify(context)}` : ""
+  ].filter(Boolean).join("\n");
+
+  const schemaName = `${section}_schema`;
+  const response = await openai.responses.create({
+    model,
+    text: {
+      format: zodTextFormat(schema, schemaName)
+    },
+    reasoning: { effort: "low" },
+    tools: [{ type: "web_search_preview", search_context_size: "high" }],
+    tool_choice: "auto",
+    input: [
+      { role: "system", content: SYSTEM_PROMPTS[section] },
+      {
+        role: "user",
+        content: `${prompt}\n\nCompany: ${context.companyName || ticker}\n\nSymbol: ${ticker}`
+      }
+    ]
+  });
+
+  const parsed = JSON.parse(response.output_text);
+  const validated = schema.parse(parsed);
+  logger.info("section_fetch_completed", {
+    requestId,
+    section,
+    iterations: 1
+  });
+  return validated;
 }
 
 export async function fetchFullReport(options, openai, mcpClients, concurrency = 3, monitoring = {}) {

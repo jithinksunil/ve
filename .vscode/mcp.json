@@ -1,0 +1,16 @@
+{
+  "servers": {
+    "yahoo-finance2 Docs": {
+      "type": "sse",
+      "url": "https://gitmcp.io/gadicc/yahoo-finance2/tree/main"
+    },
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "."]
+    },
+    "yfinance": {
+      "command": "npx",
+      "args": ["-y", "@szemeng76/yfinance-mcp-server"]
+    }
+  }
+}
